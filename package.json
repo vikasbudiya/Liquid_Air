@@ -1,0 +1,25 @@
+{
+  "name": "primary",
+  "version": "1.0.0",
+  "description": "An experimental, interactive WebGL art project that simulates a living transparent liquid surface floating in front of your camera. It responds to hand gestures in real time using camera-based computer vision, generating optical refraction, physical wakes, floating debris, and responsive ASMR-style water acoustics.",
+  "main": "index.html",
+  "scripts": {
+    "dev": "npx serve .",
+    "build": "echo \"Static HTML project - no build required\"",
+    "test": "echo \"No tests configured\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vikasbudiya/Liquid_Air.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/vikasbudiya/Liquid_Air/issues"
+  },
+  "homepage": "https://github.com/vikasbudiya/Liquid_Air#readme",
+  "dependencies": {
+    "@vercel/speed-insights": "^2.0.0"
+  }
+}
