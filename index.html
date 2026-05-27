@@ -1,0 +1,1321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Liquid Surface — Interactive Membrane Experience</title>
+<meta name="description" content="An experimental interactive art-tech experience: a living transparent liquid surface that reacts to your hands in real time.">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --glass: rgba(255,255,255,0.04);
+  --glass-border: rgba(255,255,255,0.08);
+  --glass-hover: rgba(255,255,255,0.08);
+  --text: rgba(255,255,255,0.85);
+  --text-dim: rgba(255,255,255,0.45);
+  --accent: #e84393;
+  --accent-glow: rgba(232,67,147,0.35);
+  --radius: 14px;
+  --radius-sm: 8px;
+  --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html, body {
+  width: 100%; height: 100%; overflow: hidden;
+  background: var(--bg);
+  font-family: 'Inter', -apple-system, sans-serif;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  cursor: none;
+}
+
+canvas#mainCanvas { display: block; position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+canvas#overlayCanvas { display: none; }
+#videoEl { display: none; }
+
+#cursor {
+  position: fixed; z-index: 10000; pointer-events: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.5);
+  transform: translate(-50%, -50%);
+  transition: width 0.2s, height 0.2s, border-color 0.2s;
+  mix-blend-mode: difference;
+}
+#cursor.active { width: 10px; height: 10px; border-color: var(--accent); }
+
+/* ---- PERMISSION OVERLAY ---- */
+#permissionOverlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: var(--bg);
+  transition: opacity 0.8s ease, visibility 0.8s ease;
+}
+#permissionOverlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+#permissionOverlay::before {
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 600px 600px at 30% 40%, rgba(232,67,147,0.06), transparent),
+    radial-gradient(ellipse 500px 500px at 70% 60%, rgba(0,206,201,0.04), transparent);
+  animation: ambientShift 8s ease-in-out infinite alternate;
+}
+@keyframes ambientShift { 0% { transform: scale(1) rotate(0deg); } 100% { transform: scale(1.1) rotate(3deg); } }
+.overlay-content { position: relative; text-align: center; z-index: 1; }
+.overlay-title {
+  font-family: 'Outfit', sans-serif; font-weight: 300; font-size: clamp(2rem, 5vw, 3.5rem);
+  letter-spacing: -0.02em; line-height: 1.2; margin-bottom: 0.5rem;
+  background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.6) 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.overlay-subtitle {
+  font-weight: 300; font-size: clamp(0.85rem, 2vw, 1.05rem);
+  color: var(--text-dim); margin-bottom: 2.5rem; letter-spacing: 0.04em;
+}
+#startBtn {
+  position: relative; width: 140px; height: 140px;
+  border-radius: 50%; border: none; background: transparent;
+  cursor: pointer; outline: none;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto; transition: transform 0.3s ease;
+}
+#startBtn:hover { transform: scale(1.06); }
+#startBtn:active { transform: scale(0.96); }
+#startBtn .ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(232,67,147,0.4); animation: pulse 3s ease-in-out infinite; }
+#startBtn .ring2 { position: absolute; inset: -12px; border-radius: 50%; border: 1px solid rgba(232,67,147,0.15); animation: pulse 3s ease-in-out 0.5s infinite; }
+#startBtn .ring3 { position: absolute; inset: -24px; border-radius: 50%; border: 1px solid rgba(232,67,147,0.07); animation: pulse 3s ease-in-out 1s infinite; }
+@keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.08); opacity: 0.6; } }
+#startBtn .label { font-family: 'Outfit', sans-serif; font-weight: 400; font-size: 0.85rem; color: var(--text); letter-spacing: 0.12em; text-transform: uppercase; }
+.denied-msg { display: none; margin-top: 2rem; font-size: 0.85rem; color: rgba(255,100,100,0.7); max-width: 320px; }
+.denied-msg.show { display: block; }
+
+/* ---- LOADING OVERLAY ---- */
+#loadingOverlay {
+  position: fixed; inset: 0; z-index: 999;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: var(--bg); transition: opacity 1s ease, visibility 1s ease;
+}
+#loadingOverlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.loader-ring { width: 56px; height: 56px; border: 2px solid rgba(255,255,255,0.08); border-top: 2px solid var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 1.5rem; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loader-text { font-size: 0.8rem; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* ---- CONTROLS PANEL ---- */
+#controls {
+  position: fixed; top: 1rem; right: 1rem; z-index: 100;
+  width: 260px; max-height: calc(100vh - 2rem);
+  background: rgba(10,10,18,0.65);
+  backdrop-filter: blur(28px) saturate(140%);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  border: 1px solid var(--glass-border); border-radius: var(--radius);
+  padding: 1.2rem; overflow-y: auto;
+  transform: translateX(0);
+  transition: transform 0.45s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.45s ease;
+  scrollbar-width: none;
+}
+#controls::-webkit-scrollbar { display: none; }
+#controls.hidden { transform: translateX(calc(100% + 2rem)); opacity: 0; pointer-events: none; }
+.ctrl-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; padding-bottom: 0.8rem; border-bottom: 1px solid var(--glass-border); }
+.ctrl-title { font-family: 'Outfit', sans-serif; font-weight: 500; font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+.ctrl-close { width: 28px; height: 28px; border-radius: 50%; background: var(--glass); border: 1px solid var(--glass-border); color: var(--text-dim); font-size: 0.75rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background var(--transition), color var(--transition); }
+.ctrl-close:hover { background: var(--glass-hover); color: var(--text); }
+.mode-selector { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 1.1rem; }
+.mode-pill { padding: 6px 12px; border-radius: 20px; background: var(--glass); border: 1px solid var(--glass-border); color: var(--text-dim); font-size: 0.7rem; font-weight: 500; cursor: pointer; transition: all var(--transition); letter-spacing: 0.02em; white-space: nowrap; }
+.mode-pill:hover { background: var(--glass-hover); color: var(--text); }
+.mode-pill.active { background: rgba(232,67,147,0.15); border-color: rgba(232,67,147,0.3); color: var(--accent); box-shadow: 0 0 12px var(--accent-glow); }
+.slider-group { margin-bottom: 0.9rem; }
+.slider-label { display: flex; justify-content: space-between; align-items: center; font-size: 0.7rem; color: var(--text-dim); margin-bottom: 6px; font-weight: 400; }
+.slider-val { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 500; }
+input[type="range"] { width: 100%; height: 4px; -webkit-appearance: none; background: rgba(255,255,255,0.08); border-radius: 2px; outline: none; cursor: pointer; }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); cursor: pointer; transition: transform 0.15s; }
+input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+input[type="range"]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: none; box-shadow: 0 0 8px var(--accent-glow); }
+.color-swatches { display: flex; gap: 8px; margin-bottom: 1rem; flex-wrap: wrap; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; transition: all 0.2s; position: relative; }
+.swatch:hover { transform: scale(1.15); }
+.swatch.active { border-color: rgba(255,255,255,0.6); box-shadow: 0 0 10px var(--swatch-glow, rgba(255,255,255,0.2)); }
+.ctrl-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 0.6rem; }
+.ctrl-btn { flex: 1 1 calc(50% - 3px); padding: 8px 10px; border-radius: var(--radius-sm); background: var(--glass); border: 1px solid var(--glass-border); color: var(--text-dim); font-size: 0.65rem; font-weight: 500; cursor: pointer; transition: all var(--transition); text-align: center; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.ctrl-btn:hover { background: var(--glass-hover); color: var(--text); border-color: rgba(255,255,255,0.15); }
+.ctrl-btn.active-state { background: rgba(232,67,147,0.12); border-color: rgba(232,67,147,0.25); color: var(--accent); }
+#toggleUI { position: fixed; top: 1rem; right: 1rem; z-index: 101; width: 36px; height: 36px; border-radius: 50%; background: rgba(10,10,18,0.6); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid var(--glass-border); color: var(--text-dim); font-size: 1rem; cursor: pointer; display: none; align-items: center; justify-content: center; transition: all var(--transition); }
+#toggleUI:hover { background: var(--glass-hover); color: var(--text); }
+#toggleUI.show { display: flex; right: 1rem; }
+.ctrl-divider { height: 1px; background: var(--glass-border); margin: 0.8rem 0; border: none; }
+.ctrl-section-label { font-size: 0.6rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.6rem; font-weight: 500; }
+#fps { position: fixed; bottom: 1rem; left: 1rem; z-index: 100; font-size: 0.65rem; color: var(--text-dim); font-variant-numeric: tabular-nums; font-family: 'Inter', monospace; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
+#fps.show { opacity: 1; }
+
+@media (max-width: 600px) {
+  #controls { width: calc(100% - 2rem); top: auto; bottom: 1rem; right: 1rem; left: 1rem; max-height: 50vh; }
+  #controls.hidden { transform: translateY(calc(100% + 2rem)); }
+  #toggleUI.show { top: auto; bottom: 1rem; }
+  .overlay-title { font-size: 1.8rem; }
+  #startBtn { width: 110px; height: 110px; }
+}
+</style>
+</head>
+<body>
+
+<div id="cursor"></div>
+
+<!-- Permission Overlay -->
+<div id="permissionOverlay">
+  <div class="overlay-content">
+    <h1 class="overlay-title">Liquid Surface</h1>
+    <p class="overlay-subtitle">Touch the membrane between dimensions</p>
+    <button id="startBtn" aria-label="Begin experience">
+      <span class="ring3"></span><span class="ring2"></span><span class="ring"></span>
+      <span class="label">Enter</span>
+    </button>
+    <p id="deniedMsg" class="denied-msg">Camera access is required.<br>Please allow camera permissions and try again.</p>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay" class="hidden">
+  <div class="loader-ring"></div>
+  <p class="loader-text" id="loadingText">Initializing…</p>
+</div>
+
+<!-- Controls Panel -->
+<div id="controls" class="hidden">
+  <div class="ctrl-header">
+    <span class="ctrl-title">Controls</span>
+    <button class="ctrl-close" id="ctrlClose" aria-label="Close controls">✕</button>
+  </div>
+  <div class="ctrl-section-label">Mode</div>
+  <div class="mode-selector" id="modeSelector">
+    <div class="mode-pill active" data-mode="gentle">Gentle Water</div>
+    <div class="mode-pill" data-mode="elastic">Elastic</div>
+    <div class="mode-pill" data-mode="viscous">Viscous</div>
+    <div class="mode-pill" data-mode="plasma">Neon Plasma</div>
+  </div>
+  <hr class="ctrl-divider">
+  <div class="ctrl-section-label">Parameters</div>
+  <div class="slider-group"><div class="slider-label"><span>Sensitivity</span><span class="slider-val" id="sensitivityVal">0.50</span></div><input type="range" id="sensitivity" min="0" max="1" step="0.01" value="0.5"></div>
+  <div class="slider-group"><div class="slider-label"><span>Ripple Intensity</span><span class="slider-val" id="rippleVal">0.60</span></div><input type="range" id="rippleIntensity" min="0" max="1" step="0.01" value="0.6"></div>
+  <div class="slider-group"><div class="slider-label"><span>Viscosity</span><span class="slider-val" id="viscosityVal">0.50</span></div><input type="range" id="viscosity" min="0" max="1" step="0.01" value="0.5"></div>
+  <div class="slider-group"><div class="slider-label"><span>Glow</span><span class="slider-val" id="glowVal">0.50</span></div><input type="range" id="glow" min="0" max="1" step="0.01" value="0.5"></div>
+  <hr class="ctrl-divider">
+  <div class="ctrl-section-label">Tint Color</div>
+  <div class="color-swatches" id="colorSwatches">
+    <div class="swatch active" data-color="0.91,0.26,0.58" style="background:#e84393;--swatch-glow:rgba(232,67,147,0.4);" title="Magenta"></div>
+    <div class="swatch" data-color="0.0,0.81,0.79" style="background:#00cec9;--swatch-glow:rgba(0,206,201,0.4);" title="Cyan"></div>
+    <div class="swatch" data-color="0.99,0.80,0.43" style="background:#fdcb6e;--swatch-glow:rgba(253,203,110,0.4);" title="Gold"></div>
+    <div class="swatch" data-color="0.33,0.89,0.55" style="background:#55e38c;--swatch-glow:rgba(85,227,140,0.4);" title="Green"></div>
+    <div class="swatch" data-color="0.75,0.55,1.0" style="background:#bf8cff;--swatch-glow:rgba(191,140,255,0.4);" title="Violet"></div>
+    <div class="swatch" data-color="1.0,1.0,1.0" style="background:#fff;--swatch-glow:rgba(255,255,255,0.3);" title="White"></div>
+  </div>
+  <hr class="ctrl-divider">
+  <div class="ctrl-section-label">Actions</div>
+  <div class="ctrl-actions">
+    <button class="ctrl-btn" id="btnSwitchCam">↻ Camera</button>
+    <button class="ctrl-btn" id="btnFullscreen">⛶ Fullscreen</button>
+    <button class="ctrl-btn" id="btnScreenshot">📷 Capture</button>
+    <button class="ctrl-btn" id="btnRecord" data-recording="false">⏺ Record</button>
+    <button class="ctrl-btn" id="btnAudio">🔇 Audio</button>
+    <button class="ctrl-btn" id="btnHideUI">👁 Hide UI</button>
+  </div>
+</div>
+
+<button id="toggleUI" aria-label="Show controls">☰</button>
+<div id="fps"></div>
+<video id="videoEl" playsinline autoplay muted></video>
+<canvas id="overlayCanvas"></canvas>
+
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ================================================================
+//  CONFIGURATION
+// ================================================================
+const CONFIG = {
+  rippleSize: 512,
+  maxTouches: 24,
+  fingertips: [4, 8, 12, 16, 20],
+  palmIndices: [0, 5, 9, 13, 17],
+  // One-Euro filter params for silky-smooth tracking
+  filterMinCutoff: 1.2,   // lower = smoother when still
+  filterBeta: 0.015,      // higher = more responsive when fast
+  filterDCutoff: 1.0,
+  modes: {
+    gentle:  { speed: 0.48, damping: 0.985, strength: 0.45, refraction: 1.2,  chromatic: 0.02,  glowMul: 1.2, radius: 0.045 },
+    elastic: { speed: 0.32, damping: 0.975, strength: 0.65, refraction: 1.6,  chromatic: 0.035, glowMul: 1.5, radius: 0.05  },
+    viscous: { speed: 0.15, damping: 0.955, strength: 0.90, refraction: 2.0,  chromatic: 0.045, glowMul: 1.0, radius: 0.065 },
+    plasma:  { speed: 0.58, damping: 0.992, strength: 0.55, refraction: 1.4,  chromatic: 0.06,  glowMul: 2.5, radius: 0.04  },
+  },
+  defaultTint: [0.91, 0.26, 0.58],
+  leafCount: 7,
+  leafColors: ['#8B4513','#A0522D','#CD853F','#556B2F','#6B8E23','#B8860B','#9B2335'],
+};
+
+// ================================================================
+//  STATE
+// ================================================================
+const STATE = {
+  running: false, mode: 'gentle',
+  sensitivity: 0.5, rippleIntensity: 0.6, viscosity: 0.5, glowAmount: 0.5,
+  tintColor: [...CONFIG.defaultTint],
+  // Hand tracking
+  handLandmarker: null, handReady: false,
+  landmarkFilters: new Map(),   // One-Euro filters per landmark
+  previousPositions: new Map(),
+  activeTouches: [],
+  totalVelocity: 0,             // smoothed aggregate velocity for audio
+  // Camera
+  videoReady: false, facingMode: 'user', stream: null,
+  videoWidth: 1280, videoHeight: 720, lastVideoTime: -1,
+  // Audio
+  audioCtx: null, audioEnabled: false,
+  ambientGain: null, moveGain: null, moveBP: null,
+  lastSplashTime: 0, lastBubblePopTime: 0,
+  // Recording
+  mediaRecorder: null, recordedChunks: [], isRecording: false,
+  // Renderer
+  renderer: null,
+  // FPS
+  fpsFrames: 0, fpsTime: 0, fpsDisplay: 0,
+  isMobile: /iPhone|iPad|iPod|Android/i.test(navigator.userAgent),
+  // Particles
+  bubbles: [],
+  leaves: [],
+  overlayCtx: null,
+  lastFrameTime: 0,
+};
+
+// DOM refs
+const $ = id => document.getElementById(id);
+const $permOverlay = $('permissionOverlay'), $loadOverlay = $('loadingOverlay');
+const $loadText = $('loadingText'), $startBtn = $('startBtn'), $deniedMsg = $('deniedMsg');
+const $controls = $('controls'), $toggleUI = $('toggleUI');
+const $cursor = $('cursor'), $fps = $('fps'), $videoEl = $('videoEl');
+const $overlay = $('overlayCanvas');
+
+// ================================================================
+//  UTILITIES
+// ================================================================
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function rand(lo, hi) { return lo + Math.random() * (hi - lo); }
+
+// ================================================================
+//  ONE-EURO FILTER — Jitter-free, responsive tracking
+//  Adapts cutoff frequency based on signal speed:
+//    still → heavy smoothing, fast → near-instant response
+// ================================================================
+class OneEuroFilter {
+  constructor(minCutoff = 1.2, beta = 0.015, dCutoff = 1.0) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.xPrev = null;
+    this.dxPrev = 0;
+  }
+  _alpha(cutoff, dt) {
+    const tau = 1.0 / (2 * Math.PI * cutoff);
+    return 1.0 / (1.0 + tau / dt);
+  }
+  filter(x, dt) {
+    if (this.xPrev === null) { this.xPrev = x; return x; }
+    const dx = (x - this.xPrev) / dt;
+    const adx = this._alpha(this.dCutoff, dt);
+    const dxHat = adx * dx + (1 - adx) * this.dxPrev;
+    this.dxPrev = dxHat;
+    const cutoff = this.minCutoff + this.beta * Math.abs(dxHat);
+    const a = this._alpha(cutoff, dt);
+    const xHat = a * x + (1 - a) * this.xPrev;
+    this.xPrev = xHat;
+    return xHat;
+  }
+}
+
+/** Two-axis One-Euro filter for a single landmark */
+class LandmarkFilter {
+  constructor() {
+    this.fx = new OneEuroFilter(CONFIG.filterMinCutoff, CONFIG.filterBeta, CONFIG.filterDCutoff);
+    this.fy = new OneEuroFilter(CONFIG.filterMinCutoff, CONFIG.filterBeta, CONFIG.filterDCutoff);
+  }
+  filter(x, y, dt) { return { x: this.fx.filter(x, dt), y: this.fy.filter(y, dt) }; }
+}
+
+// Custom cursor (desktop)
+if (!STATE.isMobile) {
+  document.addEventListener('mousemove', e => { $cursor.style.left = e.clientX+'px'; $cursor.style.top = e.clientY+'px'; });
+  document.addEventListener('mousedown', () => $cursor.classList.add('active'));
+  document.addEventListener('mouseup', () => $cursor.classList.remove('active'));
+} else { $cursor.style.display = 'none'; document.body.style.cursor = 'auto'; }
+
+// ================================================================
+//  WATER AUDIO ENGINE — Layered realistic water sounds
+// ================================================================
+function initAudio() {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  STATE.audioCtx = ctx;
+
+  // ---- Brown noise buffer (warmer than white noise, more water-like) ----
+  const sr = ctx.sampleRate;
+  const bufLen = sr * 4;
+
+  function makeBrownNoise() {
+    const buf = ctx.createBuffer(2, bufLen, sr);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let last = 0;
+      for (let i = 0; i < bufLen; i++) {
+        const w = Math.random() * 2 - 1;
+        last = (last + 0.02 * w) / 1.02;
+        d[i] = last * 3.5;
+      }
+    }
+    return buf;
+  }
+
+  function makeWhiteNoise() {
+    const buf = ctx.createBuffer(1, bufLen, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  // ---- Layer 1: Ambient underwater hum (always-on, very quiet) ----
+  const ambSrc = ctx.createBufferSource();
+  ambSrc.buffer = makeBrownNoise();
+  ambSrc.loop = true;
+  const ambLP = ctx.createBiquadFilter(); ambLP.type = 'lowpass'; ambLP.frequency.value = 350; ambLP.Q.value = 0.6;
+  const ambGain = ctx.createGain(); ambGain.gain.value = 0;
+  ambSrc.connect(ambLP).connect(ambGain).connect(ctx.destination);
+  ambSrc.start();
+  STATE.ambientGain = ambGain;
+
+  // ---- Layer 2: Movement sloshing (modulated by hand velocity) ----
+  const moveSrc = ctx.createBufferSource();
+  moveSrc.buffer = makeBrownNoise(); // warm, deep water sloshing instead of harsh white noise!
+  moveSrc.loop = true;
+  const moveBP = ctx.createBiquadFilter(); moveBP.type = 'bandpass'; moveBP.frequency.value = 500; moveBP.Q.value = 1.2;
+  const moveLP = ctx.createBiquadFilter(); moveLP.type = 'lowpass'; moveLP.frequency.value = 2000;
+  const moveGain = ctx.createGain(); moveGain.gain.value = 0;
+  moveSrc.connect(moveBP).connect(moveLP).connect(moveGain).connect(ctx.destination);
+  moveSrc.start();
+  STATE.moveGain = moveGain;
+  STATE.moveBP = moveBP;
+}
+
+/** Update movement audio each frame based on hand velocity */
+function updateMovementAudio(totalVelocity) {
+  if (!STATE.audioEnabled || !STATE.audioCtx) return;
+  const ctx = STATE.audioCtx, t = ctx.currentTime;
+  
+  // Non-linear mapping matching human logarithmic auditory response
+  const normVel = clamp(totalVelocity * 6.0, 0, 1);
+  const vol = Math.pow(normVel, 1.5) * 0.22;
+  STATE.moveGain.gain.linearRampToValueAtTime(vol, t + 0.04);
+  
+  // Dynamic filter frequency: slow = deep hum, fast = splashy resonance
+  const freq = 350 + Math.pow(normVel, 1.2) * 4500;
+  STATE.moveBP.frequency.linearRampToValueAtTime(clamp(freq, 350, 4800), t + 0.04);
+}
+
+/** Play a water splash (noise burst) for fast finger movements */
+function playSplash(intensity) {
+  if (!STATE.audioEnabled || !STATE.audioCtx) return;
+  const now = performance.now();
+  if (now - STATE.lastSplashTime < 80) return; // rate limit
+  STATE.lastSplashTime = now;
+  const ctx = STATE.audioCtx, t = ctx.currentTime;
+  const len = Math.floor(ctx.sampleRate * 0.2);
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1);
+  const src = ctx.createBufferSource(); src.buffer = buf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.value = 600 + intensity * 2000; bp.Q.value = 0.8;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(clamp(intensity * 0.14, 0, 0.18), t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12 + intensity * 0.08);
+  src.connect(bp).connect(g).connect(ctx.destination);
+  src.start(t); src.stop(t + 0.25);
+}
+
+/** Play a water drip/plop sound */
+function playDrip(pitch) {
+  if (!STATE.audioEnabled || !STATE.audioCtx) return;
+  const ctx = STATE.audioCtx, t = ctx.currentTime;
+  const osc = ctx.createOscillator(); osc.type = 'sine';
+  osc.frequency.setValueAtTime(600 + pitch * 800, t);
+  osc.frequency.exponentialRampToValueAtTime(150, t + 0.15);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.06, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t); osc.stop(t + 0.2);
+}
+
+/** Play a tiny bubble pop click */
+function playBubblePop() {
+  if (!STATE.audioEnabled || !STATE.audioCtx) return;
+  const now = performance.now();
+  if (now - STATE.lastBubblePopTime < 40) return;
+  STATE.lastBubblePopTime = now;
+  const ctx = STATE.audioCtx, t = ctx.currentTime;
+  const osc = ctx.createOscillator(); osc.type = 'sine';
+  osc.frequency.setValueAtTime(1500 + Math.random() * 2500, t);
+  osc.frequency.exponentialRampToValueAtTime(600, t + 0.035);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.04, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.045);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t); osc.stop(t + 0.06);
+}
+
+function setAudioEnabled(enabled) {
+  STATE.audioEnabled = enabled;
+  if (STATE.ambientGain) {
+    STATE.ambientGain.gain.linearRampToValueAtTime(enabled ? 0.025 : 0, STATE.audioCtx.currentTime + 0.5);
+  }
+  if (!enabled && STATE.moveGain) {
+    STATE.moveGain.gain.linearRampToValueAtTime(0, STATE.audioCtx.currentTime + 0.2);
+  }
+}
+
+// ================================================================
+//  CAMERA
+// ================================================================
+async function initCamera(facingMode = 'user') {
+  if (STATE.stream) STATE.stream.getTracks().forEach(t => t.stop());
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode, width: { ideal: STATE.isMobile ? 640 : 1280 }, height: { ideal: STATE.isMobile ? 480 : 720 } },
+    audio: false,
+  });
+  STATE.stream = stream; STATE.facingMode = facingMode;
+  $videoEl.srcObject = stream; await $videoEl.play();
+  const s = stream.getVideoTracks()[0].getSettings();
+  STATE.videoWidth = s.width || $videoEl.videoWidth;
+  STATE.videoHeight = s.height || $videoEl.videoHeight;
+  STATE.videoReady = true;
+}
+async function switchCamera() {
+  const next = STATE.facingMode === 'user' ? 'environment' : 'user';
+  try { await initCamera(next); if (videoTexture) { videoTexture.image = $videoEl; videoTexture.needsUpdate = true; } } catch(e) { console.warn('Switch failed', e); }
+}
+
+// ================================================================
+//  HAND TRACKING — MediaPipe HandLandmarker
+// ================================================================
+async function initHandTracking() {
+  $loadText.textContent = 'Loading hand tracking model…';
+  const { FilesetResolver, HandLandmarker } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18');
+  $loadText.textContent = 'Preparing vision engine…';
+  const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');
+  $loadText.textContent = 'Building hand detector…';
+  STATE.handLandmarker = await HandLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task', delegate: 'GPU' },
+    runningMode: 'VIDEO', numHands: 2,
+  });
+  STATE.handReady = true;
+  $loadText.textContent = 'Ready';
+}
+
+// ================================================================
+//  PROCESS HAND RESULTS — One-Euro filtered, velocity-aware
+// ================================================================
+function processHandResults(results, dt) {
+  const touches = [];
+  let velocitySum = 0, velCount = 0;
+
+  if (!results || !results.landmarks || results.landmarks.length === 0) {
+    // Preserve any intro-ripple touches, only clear hand touches
+    STATE.activeTouches = STATE.activeTouches.filter(t => t._intro);
+    STATE.totalVelocity = lerp(STATE.totalVelocity, 0, 0.1);
+    return;
+  }
+
+  const modeP = CONFIG.modes[STATE.mode];
+  const baseStr = modeP.strength * STATE.sensitivity;
+
+  for (let hi = 0; hi < results.landmarks.length; hi++) {
+    const hand = results.landmarks[hi];
+
+    // ---- Fingertips ----
+    for (const idx of CONFIG.fingertips) {
+      const lm = hand[idx];
+      const key = `${hi}_${idx}`;
+      const rawX = STATE.facingMode === 'user' ? (1.0 - lm.x) : lm.x;
+      const rawY = lm.y;
+
+      // Get or create One-Euro filter for this landmark
+      if (!STATE.landmarkFilters.has(key)) STATE.landmarkFilters.set(key, new LandmarkFilter());
+      const filt = STATE.landmarkFilters.get(key);
+      const { x: sx, y: sy } = filt.filter(rawX, rawY, dt);
+
+      // Velocity
+      const prevPos = STATE.previousPositions.get(key) || { x: sx, y: sy };
+      const vx = sx - prevPos.x, vy = sy - prevPos.y;
+      const velocity = Math.sqrt(vx * vx + vy * vy);
+      STATE.previousPositions.set(key, { x: sx, y: sy });
+      velocitySum += velocity; velCount++;
+
+      const depth = clamp(1.0 - lm.z * 2.0, 0.3, 1.0);
+      const strength = (baseStr * 1.2 + velocity * 20.0) * depth;
+
+      touches.push({ x: sx, y: sy, strength: clamp(strength, 0, 1.5), velocity });
+    }
+
+    // ---- Palm center ----
+    let px = 0, py = 0;
+    for (const idx of CONFIG.palmIndices) { px += hand[idx].x; py += hand[idx].y; }
+    px = STATE.facingMode === 'user' ? (1.0 - px / CONFIG.palmIndices.length) : (px / CONFIG.palmIndices.length);
+    py /= CONFIG.palmIndices.length;
+    const palmKey = `${hi}_palm`;
+    if (!STATE.landmarkFilters.has(palmKey)) STATE.landmarkFilters.set(palmKey, new LandmarkFilter());
+    const pf = STATE.landmarkFilters.get(palmKey);
+    const { x: spx, y: spy } = pf.filter(px, py, dt);
+    touches.push({ x: spx, y: spy, strength: baseStr * 0.15, velocity: 0 });
+  }
+
+  STATE.activeTouches = touches;
+
+  // Smoothed total velocity for audio and bubble spawning
+  const avgVel = velCount > 0 ? velocitySum / velCount : 0;
+  STATE.totalVelocity = lerp(STATE.totalVelocity, avgVel, 0.3);
+
+  // ---- Audio events based on velocity ----
+  if (STATE.totalVelocity > 0.025 && Math.random() < 0.12) playSplash(STATE.totalVelocity * 8);
+  if (STATE.totalVelocity > 0.005 && Math.random() < 0.05) playDrip(Math.random());
+}
+
+// ================================================================
+//  TOUCH INPUT (mobile + mouse fallback)
+// ================================================================
+function setupTouchInput(canvas) {
+  canvas.addEventListener('mousemove', e => {
+    if (STATE.handReady && STATE.activeTouches.length > 0) return;
+    const r = canvas.getBoundingClientRect();
+    if (e.buttons > 0) STATE.activeTouches = [{ x: (e.clientX-r.left)/r.width, y: (e.clientY-r.top)/r.height, strength: 0.5*STATE.sensitivity, velocity: 0.02 }];
+  });
+  canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    const ts = [];
+    for (let i = 0; i < e.touches.length; i++) {
+      const t = e.touches[i], r = canvas.getBoundingClientRect();
+      ts.push({ x: (t.clientX-r.left)/r.width, y: (t.clientY-r.top)/r.height, strength: 0.5*STATE.sensitivity, velocity: 0.02 });
+    }
+    STATE.activeTouches = ts;
+  }, { passive: false });
+  canvas.addEventListener('touchend', e => { if (e.touches.length === 0) STATE.activeTouches = []; });
+}
+
+// ================================================================
+//  BUBBLE PARTICLE SYSTEM
+// ================================================================
+class Bubble {
+  constructor(x, y, vx, vy) {
+    this.x = x; this.y = y;
+    this.vx = vx; this.vy = vy;
+    this.size = rand(3, 14);
+    this.maxLife = rand(0.6, 2.0);
+    this.age = 0;
+    this.wobblePhase = rand(0, Math.PI * 2);
+    this.wobbleAmp = rand(15, 40);
+    this.wobbleSpeed = rand(3, 6);
+    this.popping = false;
+    this.popScale = 1;
+    this.opacity = rand(0.4, 0.75);
+  }
+  update(dt) {
+    this.age += dt;
+    const life = 1 - this.age / this.maxLife;
+    if (life <= 0) return false;
+    // Rise upward, wobble sideways
+    this.vy -= 120 * dt; // much faster and bubble-like buoyancy!
+    this.x += Math.sin(this.age * this.wobbleSpeed + this.wobblePhase) * this.wobbleAmp * dt;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.vx *= 0.97; this.vy *= 0.97;
+    // Start popping near end of life
+    if (life < 0.18 && !this.popping) {
+      this.popping = true;
+      playBubblePop();
+    }
+    if (this.popping) this.popScale = lerp(this.popScale, 1.8, 0.12);
+    this.opacity = life * 0.65;
+    return true;
+  }
+  draw(ctx) {
+    const s = this.size * (this.popping ? this.popScale : 1);
+    const a = this.opacity;
+    // Bubble body
+    const grad = ctx.createRadialGradient(this.x - s*0.25, this.y - s*0.25, s*0.05, this.x, this.y, s);
+    grad.addColorStop(0, `rgba(220,240,255,${a*0.7})`);
+    grad.addColorStop(0.4, `rgba(180,215,255,${a*0.25})`);
+    grad.addColorStop(0.85, `rgba(140,190,255,${a*0.08})`);
+    grad.addColorStop(1, `rgba(120,170,255,${a*0.02})`);
+    ctx.beginPath(); ctx.arc(this.x, this.y, s, 0, Math.PI*2);
+    ctx.fillStyle = grad; ctx.fill();
+    // Rim
+    ctx.strokeStyle = `rgba(200,230,255,${a*0.3})`;
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    // Highlight
+    ctx.beginPath(); ctx.arc(this.x - s*0.28, this.y - s*0.28, s*0.22, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,255,255,${a*0.85})`;
+    ctx.fill();
+  }
+}
+
+function spawnBubbles(touches, dt) {
+  for (const t of touches) {
+    const vel = t.velocity || 0;
+    if (vel < 0.015) continue;
+    // Spawn rate proportional to velocity
+    const rate = vel * 300;
+    const count = Math.floor(rate * dt + (Math.random() < (rate * dt % 1) ? 1 : 0));
+    const w = window.innerWidth, h = window.innerHeight;
+    for (let i = 0; i < count && STATE.bubbles.length < 120; i++) {
+      const bx = t.x * w + rand(-25, 25);
+      const by = t.y * h + rand(-25, 25);
+      const bvx = rand(-40, 40);
+      const bvy = rand(-80, -20);
+      STATE.bubbles.push(new Bubble(bx, by, bvx, bvy));
+    }
+  }
+}
+
+// ================================================================
+//  FLOATING LEAF SYSTEM
+// ================================================================
+class Leaf {
+  constructor(canvasW, canvasH) {
+    this.x = rand(50, canvasW - 50);
+    this.y = rand(50, canvasH - 50);
+    this.vx = rand(-8, 8);
+    this.vy = rand(-5, 5);
+    this.rotation = rand(0, Math.PI * 2);
+    this.angVel = rand(-0.3, 0.3);
+    this.size = rand(14, 28);
+    this.color = CONFIG.leafColors[Math.floor(Math.random() * CONFIG.leafColors.length)];
+    this.veinColor = 'rgba(0,0,0,0.12)';
+    this.opacity = rand(0.6, 0.85);
+    this.bobPhase = rand(0, Math.PI * 2);
+    this.bobAmp = rand(0.3, 0.8);
+    // Leaf shape variant: 0 = pointed, 1 = round, 2 = long
+    this.variant = Math.floor(rand(0, 3));
+    this.driftAngle = rand(0, Math.PI * 2);
+    this.driftSpeed = rand(2, 6);
+  }
+  update(dt, touches, canvasW, canvasH, time) {
+    // Ambient drift
+    this.driftAngle += rand(-0.3, 0.3) * dt;
+    this.vx += Math.cos(this.driftAngle) * this.driftSpeed * dt;
+    this.vy += Math.sin(this.driftAngle) * this.driftSpeed * dt;
+
+    // Push from finger touches
+    for (const t of touches) {
+      const tx = t.x * canvasW, ty = t.y * canvasH;
+      const dx = this.x - tx, dy = this.y - ty;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const pushRadius = 120;
+      if (dist < pushRadius && dist > 1) {
+        const force = (1 - dist / pushRadius) * 400 * (t.strength || 0.3);
+        this.vx += (dx / dist) * force * dt;
+        this.vy += (dy / dist) * force * dt;
+        this.angVel += rand(-2, 2) * dt;
+      }
+    }
+
+    // Damping
+    this.vx *= 0.985; this.vy *= 0.985;
+    this.angVel *= 0.98;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.rotation += this.angVel * dt;
+
+    // Bobbing
+    const bob = Math.sin(time * 1.5 + this.bobPhase) * this.bobAmp;
+    this.drawY = this.y + bob;
+
+    // Wrap around edges with padding
+    const pad = 40;
+    if (this.x < -pad) this.x = canvasW + pad;
+    if (this.x > canvasW + pad) this.x = -pad;
+    if (this.y < -pad) this.y = canvasH + pad;
+    if (this.y > canvasH + pad) this.y = -pad;
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.drawY || this.y);
+    ctx.rotate(this.rotation);
+    ctx.globalAlpha = this.opacity;
+    const s = this.size;
+
+    // Draw beautiful, realistic soft drop shadow under the leaf
+    ctx.save();
+    ctx.translate(2.5, 4.5); // offset down-right
+    ctx.beginPath();
+    if (this.variant === 0) {
+      ctx.moveTo(0, -s);
+      ctx.bezierCurveTo(s*0.55, -s*0.6, s*0.4, s*0.4, 0, s);
+      ctx.bezierCurveTo(-s*0.4, s*0.4, -s*0.55, -s*0.6, 0, -s);
+    } else if (this.variant === 1) {
+      ctx.ellipse(0, 0, s*0.45, s*0.7, 0, 0, Math.PI*2);
+    } else {
+      ctx.moveTo(0, -s*1.1);
+      ctx.bezierCurveTo(s*0.3, -s*0.5, s*0.25, s*0.5, 0, s*1.1);
+      ctx.bezierCurveTo(-s*0.25, s*0.5, -s*0.3, -s*0.5, 0, -s*1.1);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)'; // soft shadow
+    ctx.fill();
+    ctx.restore();
+
+    // Draw leaf shape based on variant
+    ctx.beginPath();
+    if (this.variant === 0) {
+      // Pointed leaf
+      ctx.moveTo(0, -s);
+      ctx.bezierCurveTo(s*0.55, -s*0.6, s*0.4, s*0.4, 0, s);
+      ctx.bezierCurveTo(-s*0.4, s*0.4, -s*0.55, -s*0.6, 0, -s);
+    } else if (this.variant === 1) {
+      // Round leaf
+      ctx.ellipse(0, 0, s*0.45, s*0.7, 0, 0, Math.PI*2);
+    } else {
+      // Long narrow leaf
+      ctx.moveTo(0, -s*1.1);
+      ctx.bezierCurveTo(s*0.3, -s*0.5, s*0.25, s*0.5, 0, s*1.1);
+      ctx.bezierCurveTo(-s*0.25, s*0.5, -s*0.3, -s*0.5, 0, -s*1.1);
+    }
+    ctx.closePath();
+    ctx.fillStyle = this.color;
+    ctx.fill();
+
+    // Subtle shadow/stroke
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+
+    // Central vein
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 0.85);
+    ctx.lineTo(0, s * 0.85);
+    ctx.strokeStyle = this.veinColor;
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+
+    // Side veins — alternate direction for natural look
+    ctx.lineWidth = 0.4;
+    for (let i = -2; i <= 2; i++) {
+      if (i === 0) continue;
+      const yy = i * s * 0.28;
+      const dir = (i % 2 === 0) ? 1 : -1;
+      ctx.beginPath(); ctx.moveTo(0, yy);
+      ctx.lineTo(s * 0.22 * dir, yy + s * 0.12);
+      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, yy);
+      ctx.lineTo(-s * 0.22 * dir, yy + s * 0.12);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+}
+
+function initLeaves() {
+  const w = window.innerWidth, h = window.innerHeight;
+  STATE.leaves = [];
+  for (let i = 0; i < CONFIG.leafCount; i++) {
+    STATE.leaves.push(new Leaf(w, h));
+  }
+}
+
+// ================================================================
+//  OVERLAY CANVAS — Draws bubbles and leaves on top of Three.js
+// ================================================================
+function initOverlay() {
+  const c = $overlay;
+  c.width = window.innerWidth * Math.min(devicePixelRatio, 2);
+  c.height = window.innerHeight * Math.min(devicePixelRatio, 2);
+  c.style.width = window.innerWidth + 'px';
+  c.style.height = window.innerHeight + 'px';
+  STATE.overlayCtx = c.getContext('2d');
+  STATE.overlayCtx.scale(Math.min(devicePixelRatio, 2), Math.min(devicePixelRatio, 2));
+}
+
+function updateOverlay(dt, time) {
+  const ctx = STATE.overlayCtx;
+  if (!ctx) return;
+  const w = window.innerWidth, h = window.innerHeight;
+  ctx.clearRect(0, 0, w, h);
+
+  // ---- Update & draw leaves ----
+  for (const leaf of STATE.leaves) {
+    leaf.update(dt, STATE.activeTouches, w, h, time);
+    leaf.draw(ctx);
+  }
+
+  // ---- Spawn bubbles from fast-moving fingers ----
+  spawnBubbles(STATE.activeTouches, dt);
+
+  // ---- Update & draw bubbles ----
+  STATE.bubbles = STATE.bubbles.filter(b => b.update(dt));
+  for (const b of STATE.bubbles) b.draw(ctx);
+}
+
+// ================================================================
+//  THREE.JS + SHADERS + RENDER PIPELINE
+// ================================================================
+let renderer, videoTexture, overlayTexture;
+let simScene, simCamera, simQuad, simMaterialA;
+let compScene, compCamera, compQuad, compMaterial;
+let rts = [];
+let prevIdx = 0, currIdx = 1;
+let startTime = 0;
+let rippleSize = 512;
+
+const RIPPLE_VERTEX = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+`;
+
+const RIPPLE_FRAGMENT = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uPrevState, uCurrState;
+uniform float uDamping, uSpeed, uTime, uAmbientNoise, uTouchRadius;
+uniform vec2 uTexelSize;
+uniform int uTouchCount;
+uniform vec3 uTouches[24];
+
+void main() {
+  float prev = texture2D(uPrevState, vUv).r;
+  float curr = texture2D(uCurrState, vUv).r;
+  float l = texture2D(uCurrState, vUv + vec2(-uTexelSize.x, 0.0)).r;
+  float r = texture2D(uCurrState, vUv + vec2( uTexelSize.x, 0.0)).r;
+  float u = texture2D(uCurrState, vUv + vec2(0.0,  uTexelSize.y)).r;
+  float d = texture2D(uCurrState, vUv + vec2(0.0, -uTexelSize.y)).r;
+  float laplacian = l + r + u + d - 4.0 * curr;
+  float next = 2.0 * curr - prev + uSpeed * uSpeed * laplacian;
+  next *= uDamping;
+  for (int i = 0; i < 24; i++) {
+    if (i >= uTouchCount) break;
+    vec2 tPos = uTouches[i].xy;
+    float tStr = uTouches[i].z;
+    if (tStr > 0.001) {
+      float dist = distance(vUv, tPos);
+      next += tStr * exp(-dist * dist / (uTouchRadius * uTouchRadius));
+    }
+  }
+  float noise = sin(vUv.x * 43.7 + uTime * 0.7) * cos(vUv.y * 37.3 + uTime * 0.5) * uAmbientNoise;
+  next += noise;
+  next = clamp(next, -3.0, 3.0);
+  gl_FragColor = vec4(next, 0.0, 0.0, 1.0);
+}
+`;
+
+const MEMBRANE_VERTEX = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+`;
+
+const MEMBRANE_FRAGMENT = `
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D uVideo, uRipple, uOverlay;
+uniform vec2 uResolution, uVideoResolution;
+uniform float uTime, uRefractionStrength, uChromaticStrength, uGlowIntensity, uFresnelPower, uRippleSize;
+uniform vec3 uTintColor;
+uniform bool uMirror;
+
+vec2 coverUV(vec2 uv) {
+  float sa = uResolution.x / uResolution.y;
+  float va = uVideoResolution.x / uVideoResolution.y;
+  vec2 r = uv;
+  if (sa > va) { r.y = (uv.y - 0.5) * (va / sa) + 0.5; }
+  else { r.x = (uv.x - 0.5) * (sa / va) + 0.5; }
+  if (uMirror) r.x = 1.0 - r.x;
+  return r;
+}
+
+vec2 getNormal(vec2 uv, vec2 tx) {
+  float l = texture2D(uRipple, uv + vec2(-tx.x, 0.0)).r;
+  float r = texture2D(uRipple, uv + vec2( tx.x, 0.0)).r;
+  float b = texture2D(uRipple, uv + vec2(0.0, -tx.y)).r;
+  float t = texture2D(uRipple, uv + vec2(0.0,  tx.y)).r;
+  return vec2(l - r, b - t);
+}
+
+void main() {
+  vec2 rippleTexel = vec2(1.0 / uRippleSize);
+  float height = texture2D(uRipple, vUv).r;
+  
+  // Scale normal by 8.0 for dramatic liquid-glass refraction!
+  vec2 normal = getNormal(vUv, rippleTexel) * uRefractionStrength * 8.0;
+
+  vec2 baseUV = coverUV(vUv);
+  float ch = uChromaticStrength;
+  float red = texture2D(uVideo, baseUV + normal * (1.0 + ch)).r;
+  float grn = texture2D(uVideo, baseUV + normal).g;
+  float blu = texture2D(uVideo, baseUV + normal * (1.0 - ch)).b;
+  vec3 color = vec3(red, grn, blu);
+
+  // Sample 2D canvas overlay (bubbles, leaves) with refraction distortion!
+  vec2 overlayUV = vUv + normal * 0.35;
+  vec4 overlayColor = texture2D(uOverlay, overlayUV);
+  color = mix(color, overlayColor.rgb, overlayColor.a);
+
+  float normalMag = length(normal);
+  float fresnel = pow(normalMag * 1.5, uFresnelPower) * uGlowIntensity;
+  color += uTintColor * fresnel;
+
+  float spec = pow(clamp(abs(normal.x + normal.y) * 1.5, 0.0, 1.0), 4.0);
+  color += vec3(spec * 0.45 * uGlowIntensity);
+
+  float c1 = sin(vUv.x * 40.0 + uTime * 1.5 + height * 10.0);
+  float c2 = cos(vUv.y * 35.0 - uTime * 1.2 + height * 8.0);
+  float caustic = pow(abs(c1 * c2), 3.0) * abs(height) * 0.8 * uGlowIntensity;
+  color += uTintColor * caustic;
+
+  float thinFilm = pow(clamp(abs(height) * 2.5, 0.0, 1.0), 3.0) * 0.35 * uGlowIntensity;
+  color += mix(uTintColor, vec3(0.6, 0.8, 1.0), 0.5) * thinFilm;
+
+  float vignette = 1.0 - smoothstep(0.3, 1.4, length(vUv - 0.5) * 1.8);
+  color *= mix(0.7, 1.0, vignette);
+
+  float ambient = sin(uTime * 0.3) * 0.01 + 0.02;
+  color += uTintColor * ambient * uGlowIntensity * 0.3;
+
+  gl_FragColor = vec4(color, 1.0);
+}
+`;
+
+function initThreeJS() {
+  renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 1);
+  const c = renderer.domElement; c.id = 'mainCanvas';
+  c.style.position = 'fixed'; c.style.top = '0'; c.style.left = '0'; c.style.zIndex = '1';
+  document.body.appendChild(c);
+  STATE.renderer = renderer;
+
+  videoTexture = new THREE.VideoTexture($videoEl);
+  videoTexture.minFilter = THREE.LinearFilter; videoTexture.magFilter = THREE.LinearFilter;
+  videoTexture.format = THREE.RGBAFormat; videoTexture.colorSpace = THREE.SRGBColorSpace;
+
+  rippleSize = STATE.isMobile ? 256 : CONFIG.rippleSize;
+  const rtOpts = { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false };
+  rts = [new THREE.WebGLRenderTarget(rippleSize,rippleSize,rtOpts), new THREE.WebGLRenderTarget(rippleSize,rippleSize,rtOpts), new THREE.WebGLRenderTarget(rippleSize,rippleSize,rtOpts)];
+  prevIdx = 0; currIdx = 1;
+
+  simScene = new THREE.Scene();
+  simCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  const modeP = CONFIG.modes[STATE.mode];
+  const touchArr = []; for (let i = 0; i < CONFIG.maxTouches; i++) touchArr.push(new THREE.Vector3(0,0,0));
+  simMaterialA = new THREE.ShaderMaterial({
+    vertexShader: RIPPLE_VERTEX, fragmentShader: RIPPLE_FRAGMENT,
+    uniforms: {
+      uPrevState: {value:rts[0].texture}, uCurrState: {value:rts[1].texture},
+      uDamping: {value:modeP.damping}, uSpeed: {value:modeP.speed},
+      uTexelSize: {value:new THREE.Vector2(1/rippleSize,1/rippleSize)},
+      uTime: {value:0}, uAmbientNoise: {value:0.002},
+      uTouchCount: {value:0}, uTouches: {value:touchArr}, uTouchRadius: {value:modeP.radius},
+    }, depthTest:false, depthWrite:false,
+  });
+  simQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), simMaterialA);
+  simScene.add(simQuad);
+
+  // Initialize CanvasTexture for the 2D overlay canvas
+  overlayTexture = new THREE.CanvasTexture($overlay);
+  overlayTexture.minFilter = THREE.LinearFilter;
+  overlayTexture.magFilter = THREE.LinearFilter;
+
+  compScene = new THREE.Scene();
+  compCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+  compMaterial = new THREE.ShaderMaterial({
+    vertexShader: MEMBRANE_VERTEX, fragmentShader: MEMBRANE_FRAGMENT,
+    uniforms: {
+      uVideo: {value:videoTexture}, uRipple: {value:rts[1].texture}, uRippleSize: {value:rippleSize},
+      uOverlay: {value:overlayTexture},
+      uResolution: {value:new THREE.Vector2(window.innerWidth,window.innerHeight)},
+      uVideoResolution: {value:new THREE.Vector2(STATE.videoWidth,STATE.videoHeight)},
+      uTime: {value:0}, uRefractionStrength: {value:modeP.refraction*STATE.rippleIntensity},
+      uChromaticStrength: {value:modeP.chromatic}, uGlowIntensity: {value:modeP.glowMul*STATE.glowAmount},
+      uTintColor: {value:new THREE.Vector3(...STATE.tintColor)}, uFresnelPower: {value:2.5},
+      uMirror: {value:STATE.facingMode==='user'},
+    }, depthTest:false, depthWrite:false,
+  });
+  compQuad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), compMaterial);
+  compScene.add(compQuad);
+
+  window.addEventListener('resize', onResize);
+  setupTouchInput(renderer.domElement);
+  startTime = performance.now();
+}
+
+function onResize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  compMaterial.uniforms.uResolution.value.set(w, h);
+  // Resize overlay canvas — setting width/height resets the context transform,
+  // so we must re-apply the DPR scale (no cumulative buildup).
+  const dpr = Math.min(devicePixelRatio, 2);
+  $overlay.width = w * dpr; $overlay.height = h * dpr;
+  $overlay.style.width = w + 'px'; $overlay.style.height = h + 'px';
+  const ctx = $overlay.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // reset + apply in one call
+  STATE.overlayCtx = ctx;
+}
+
+// ================================================================
+//  ANIMATION LOOP
+// ================================================================
+let handDetectCounter = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  if (!STATE.running) return;
+
+  const now = performance.now();
+  const elapsed = (now - startTime) / 1000;
+  // On first frame, lastFrameTime hasn't been set yet; use a sane default (16ms)
+  const dt = STATE.lastFrameTime ? Math.min((now - STATE.lastFrameTime) / 1000, 0.05) : 0.016;
+  STATE.lastFrameTime = now;
+
+  // FPS
+  STATE.fpsFrames++;
+  if (now - STATE.fpsTime > 500) {
+    STATE.fpsDisplay = Math.round(STATE.fpsFrames / ((now - STATE.fpsTime) / 1000));
+    STATE.fpsFrames = 0; STATE.fpsTime = now;
+    if ($fps.classList.contains('show')) $fps.textContent = `${STATE.fpsDisplay} FPS`;
+  }
+
+  // ---- Hand detection ----
+  if (STATE.handReady && STATE.videoReady && $videoEl.readyState >= 2) {
+    const currentVideoTime = $videoEl.currentTime;
+    if (currentVideoTime !== STATE.lastVideoTime) {
+      STATE.lastVideoTime = currentVideoTime;
+      try {
+        const results = STATE.handLandmarker.detectForVideo($videoEl, now);
+        processHandResults(results, dt);
+      } catch(e) {}
+    }
+  }
+
+  // ---- Update audio ----
+  updateMovementAudio(STATE.totalVelocity);
+
+  // ---- Ripple simulation ----
+  const modeP = CONFIG.modes[STATE.mode];
+  const su = simMaterialA.uniforms;
+  su.uDamping.value = lerp(su.uDamping.value, modeP.damping - (1-STATE.viscosity)*0.03, 0.05);
+  su.uSpeed.value = lerp(su.uSpeed.value, modeP.speed, 0.05);
+  su.uTouchRadius.value = lerp(su.uTouchRadius.value, modeP.radius, 0.05);
+  su.uTime.value = elapsed;
+  su.uAmbientNoise.value = STATE.mode === 'plasma' ? 0.005 : 0.001;
+
+  // Decay and filter out expired intro touches
+  STATE.activeTouches = STATE.activeTouches.filter(t => {
+    if (t._intro) {
+      t.strength -= dt * 1.5; // decay strength
+      return t.strength > 0.005;
+    }
+    return true;
+  });
+
+  const touches = [...STATE.activeTouches];
+  // Add leaf positions as subtle ripple wakes if they are moving quickly!
+  const w = window.innerWidth, h = window.innerHeight;
+  for (const leaf of STATE.leaves) {
+    const vel = Math.sqrt(leaf.vx * leaf.vx + leaf.vy * leaf.vy);
+    if (vel > 1.8) { // threshold for ripple wake
+      touches.push({
+        x: leaf.x / w,
+        y: leaf.drawY ? leaf.drawY / h : leaf.y / h,
+        strength: clamp(vel * 0.002 * STATE.sensitivity, 0, 0.06)
+      });
+    }
+  }
+
+  su.uTouchCount.value = Math.min(touches.length, CONFIG.maxTouches);
+  for (let i = 0; i < CONFIG.maxTouches; i++) {
+    if (i < touches.length) su.uTouches.value[i].set(touches[i].x, 1.0 - touches[i].y, touches[i].strength);
+    else su.uTouches.value[i].set(0,0,0);
+  }
+
+  // Triple-buffer ping-pong
+  const writeIdx = 3 - prevIdx - currIdx;
+  su.uPrevState.value = rts[prevIdx].texture;
+  su.uCurrState.value = rts[currIdx].texture;
+  renderer.setRenderTarget(rts[writeIdx]);
+  renderer.render(simScene, simCamera);
+
+  // Composite pass
+  const cu = compMaterial.uniforms;
+  cu.uRipple.value = rts[writeIdx].texture;
+  cu.uTime.value = elapsed;
+  cu.uRefractionStrength.value = lerp(cu.uRefractionStrength.value, modeP.refraction * STATE.rippleIntensity, 0.08);
+  cu.uChromaticStrength.value = lerp(cu.uChromaticStrength.value, modeP.chromatic * STATE.rippleIntensity, 0.08);
+  cu.uGlowIntensity.value = lerp(cu.uGlowIntensity.value, modeP.glowMul * STATE.glowAmount, 0.08);
+  cu.uTintColor.value.set(...STATE.tintColor);
+  cu.uMirror.value = STATE.facingMode === 'user';
+  cu.uVideoResolution.value.set(STATE.videoWidth, STATE.videoHeight);
+  if (overlayTexture) overlayTexture.needsUpdate = true;
+  renderer.setRenderTarget(null);
+  renderer.render(compScene, compCamera);
+
+  prevIdx = currIdx;
+  currIdx = writeIdx;
+
+  // ---- Update overlay (bubbles + leaves) ----
+  updateOverlay(dt, elapsed);
+}
+
+// ================================================================
+//  UI CONTROLS
+// ================================================================
+function initUI() {
+  document.querySelectorAll('.mode-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('.mode-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      STATE.mode = pill.dataset.mode;
+    });
+  });
+
+  $('sensitivity').addEventListener('input', e => { STATE.sensitivity = +e.target.value; $('sensitivityVal').textContent = STATE.sensitivity.toFixed(2); });
+  $('rippleIntensity').addEventListener('input', e => { STATE.rippleIntensity = +e.target.value; $('rippleVal').textContent = STATE.rippleIntensity.toFixed(2); });
+  $('viscosity').addEventListener('input', e => { STATE.viscosity = +e.target.value; $('viscosityVal').textContent = STATE.viscosity.toFixed(2); });
+  $('glow').addEventListener('input', e => { STATE.glowAmount = +e.target.value; $('glowVal').textContent = STATE.glowAmount.toFixed(2); });
+
+  document.querySelectorAll('.swatch').forEach(sw => {
+    sw.addEventListener('click', () => {
+      document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+      sw.classList.add('active');
+      STATE.tintColor = sw.dataset.color.split(',').map(Number);
+    });
+  });
+
+  $('btnSwitchCam').addEventListener('click', switchCamera);
+  $('btnFullscreen').addEventListener('click', () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+    else document.exitFullscreen();
+  });
+  $('btnScreenshot').addEventListener('click', () => {
+    if (!renderer) return;
+    const a = document.createElement('a'); a.download = `liquid-surface-${Date.now()}.png`;
+    a.href = renderer.domElement.toDataURL('image/png'); a.click();
+  });
+  $('btnRecord').addEventListener('click', function() {
+    if (!STATE.isRecording) { startRecording(); this.textContent='⏹ Stop'; this.classList.add('active-state'); }
+    else { stopRecording(); this.textContent='⏺ Record'; this.classList.remove('active-state'); }
+  });
+  $('btnAudio').addEventListener('click', function() {
+    if (!STATE.audioCtx) initAudio();
+    if (STATE.audioCtx.state === 'suspended') STATE.audioCtx.resume();
+    STATE.audioEnabled = !STATE.audioEnabled;
+    setAudioEnabled(STATE.audioEnabled);
+    this.textContent = STATE.audioEnabled ? '🔊 Audio' : '🔇 Audio';
+    this.classList.toggle('active-state', STATE.audioEnabled);
+  });
+
+  $('btnHideUI').addEventListener('click', () => { $controls.classList.add('hidden'); $toggleUI.classList.add('show'); });
+  $('ctrlClose').addEventListener('click', () => { $controls.classList.add('hidden'); $toggleUI.classList.add('show'); });
+  $toggleUI.addEventListener('click', () => { $controls.classList.remove('hidden'); $toggleUI.classList.remove('show'); });
+
+  document.addEventListener('dblclick', e => {
+    if (e.target.closest('#controls') || e.target.closest('#toggleUI')) return;
+    $fps.classList.toggle('show');
+  });
+}
+
+// ================================================================
+//  VIDEO RECORDING
+// ================================================================
+function startRecording() {
+  if (!renderer) return;
+  const stream = renderer.domElement.captureStream(30);
+  STATE.recordedChunks = [];
+  const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+  STATE.mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+  STATE.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) STATE.recordedChunks.push(e.data); };
+  STATE.mediaRecorder.onstop = () => {
+    const blob = new Blob(STATE.recordedChunks, { type: mime });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `liquid-surface-${Date.now()}.webm`; a.click(); URL.revokeObjectURL(a.href);
+  };
+  STATE.mediaRecorder.start(); STATE.isRecording = true;
+}
+function stopRecording() {
+  if (STATE.mediaRecorder && STATE.isRecording) { STATE.mediaRecorder.stop(); STATE.isRecording = false; }
+}
+
+// ================================================================
+//  INTRO RIPPLE
+// ================================================================
+function playIntroRipple() {
+  let f = 0;
+  const iv = setInterval(() => {
+    if (f > 30) { clearInterval(iv); return; }
+    // Mark as _intro so hand detection doesn't clobber these
+    STATE.activeTouches.push({ x:0.5, y:0.5, strength: Math.sin(f/30*Math.PI)*0.6, velocity:0, _intro:true });
+    f++;
+  }, 33);
+}
+
+// ================================================================
+//  MAIN INIT
+// ================================================================
+async function init() {
+  initUI();
+
+  $startBtn.addEventListener('click', async () => {
+    $startBtn.style.pointerEvents = 'none';
+    try {
+      await initCamera(STATE.facingMode);
+      $permOverlay.classList.add('hidden');
+      $loadOverlay.classList.remove('hidden');
+
+      await initHandTracking();
+
+      initThreeJS();
+      initOverlay();
+      initLeaves();
+
+      STATE.running = true;
+      requestAnimationFrame(animate);
+
+      $loadOverlay.classList.add('hidden');
+      setTimeout(() => $controls.classList.remove('hidden'), 800);
+      setTimeout(playIntroRipple, 400);
+
+    } catch (err) {
+      console.error('Init error:', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        $deniedMsg.classList.add('show');
+        $startBtn.style.pointerEvents = 'auto';
+      } else {
+        $loadText.textContent = 'Hand tracking unavailable — touch to interact';
+        try {
+          if (!STATE.videoReady) await initCamera(STATE.facingMode);
+          initThreeJS(); initOverlay(); initLeaves();
+          STATE.running = true; requestAnimationFrame(animate);
+          setTimeout(() => { $loadOverlay.classList.add('hidden'); $controls.classList.remove('hidden'); }, 1200);
+          setTimeout(playIntroRipple, 800);
+        } catch(e2) {
+          $permOverlay.classList.remove('hidden'); $loadOverlay.classList.add('hidden');
+          $deniedMsg.textContent = 'An error occurred. Please reload.';
+          $deniedMsg.classList.add('show'); $startBtn.style.pointerEvents = 'auto';
+        }
+      }
+    }
+  });
+}
+
+init();
+</script>
+</body>
+</html>
